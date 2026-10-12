@@ -107,3 +107,62 @@ def test_ollama_unavailable_returns_503(session_factory):
 def test_missing_payment_id_field_returns_422(session_factory):
     r = make_client(session_factory, StubDecisionMaker()).post("/recovery/proposal", json={})
     assert r.status_code == 422
+
+
+# ---- POST /recovery/simulate ----
+
+class StubToolModel:
+    def __init__(self, messages=None, error=None):
+        self.messages, self.error = list(messages or []), error
+
+    def chat(self, messages, tools=None):
+        if self.error:
+            raise self.error
+        return self.messages.pop(0)
+
+
+def test_simulate_returns_labelled_simulated_result(session_factory):
+    stub = StubToolModel([
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"function": {"name": "schedule_retry", "arguments": {"retry_after_hours": 24}}}]},
+        {"role": "assistant", "content": "A retry was scheduled."},
+    ])
+    r = make_client(session_factory, stub).post("/recovery/simulate", json={"payment_id": "p_failed"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["simulated"] is True
+    assert body["payment_id"] == "p_failed"
+    assert body["action_taken"] == "schedule_retry"
+    assert body["tool_calls"][0]["status"] == "executed_simulated"
+    assert body["final_message_is_narrative_only"] is True
+
+
+def test_simulate_does_not_write_to_the_database(session_factory):
+    stub = StubToolModel([
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"function": {"name": "request_payment_update", "arguments": {}}}]},
+        {"role": "assistant", "content": "ok"},
+    ])
+    make_client(session_factory, stub).post("/recovery/simulate", json={"payment_id": "p_failed"})
+    db = session_factory()
+    from app.db.models import AgentDecision, RecoveryAttempt, Payment
+    assert db.query(AgentDecision).count() == 0
+    assert db.query(RecoveryAttempt).count() == 0
+    assert db.query(Payment).filter(Payment.id == "p_failed").one().status == "failed"
+    db.close()
+
+
+def test_simulate_missing_payment_404_and_non_failed_409(session_factory):
+    client = make_client(session_factory, StubToolModel())
+    assert client.post("/recovery/simulate", json={"payment_id": "nope"}).status_code == 404
+    assert client.post("/recovery/simulate", json={"payment_id": "p_ok"}).status_code == 409
+
+
+def test_simulate_ollama_down_503(session_factory):
+    client = make_client(session_factory, StubToolModel(error=OllamaUnavailableError("down")))
+    assert client.post("/recovery/simulate", json={"payment_id": "p_failed"}).status_code == 503
+
+
+def test_simulate_invalid_model_output_502(session_factory):
+    client = make_client(session_factory, StubToolModel([{"role": "assistant", "content": "just text"}]))
+    assert client.post("/recovery/simulate", json={"payment_id": "p_failed"}).status_code == 502

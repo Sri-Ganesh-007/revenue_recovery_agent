@@ -69,7 +69,26 @@ class OllamaDecisionMaker:
         data["customer"] = {"id": context.customer.id}
         return json.dumps(data)
 
+    def chat(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
+        """Send a chat turn (optionally with tool definitions); return the reply message."""
+        payload = {
+            "model": self.model,
+            "stream": False,
+            "options": {"temperature": 0},
+            "messages": messages,
+        }
+        if tools:
+            payload["tools"] = tools
+        return self._post_chat(payload)
+
     def _call_ollama(self, payload: dict) -> str:
+        message = self._post_chat(payload)
+        content = message.get("content")
+        if not isinstance(content, str):
+            raise InvalidModelOutputError("Ollama response had no message content")
+        return content
+
+    def _post_chat(self, payload: dict) -> dict:
         request = urllib.request.Request(
             f"{self.base_url}/api/chat",
             data=json.dumps(payload).encode(),
@@ -83,7 +102,7 @@ class OllamaDecisionMaker:
         except json.JSONDecodeError as exc:
             raise InvalidModelOutputError("Ollama returned a non-JSON response") from exc
 
-        content = body.get("message", {}).get("content") if isinstance(body, dict) else None
-        if not isinstance(content, str):
-            raise InvalidModelOutputError("Ollama response had no message content")
-        return content
+        message = body.get("message") if isinstance(body, dict) else None
+        if not isinstance(message, dict):
+            raise InvalidModelOutputError("Ollama response had no message")
+        return message
