@@ -1,0 +1,61 @@
+from fastapi import Depends, FastAPI, HTTPException
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from app.context.context_builder import RecoveryContextBuilder
+from app.db.database import SessionLocal
+from app.llm.decision_maker import (
+    InvalidModelOutputError,
+    OllamaDecisionMaker,
+    OllamaUnavailableError,
+)
+from app.llm.proposal import RecoveryProposal
+from app.repositories.recovery_repository import RecoveryRepository
+
+app = FastAPI(title="Revenue recovery agent")
+
+@app.get("/")
+def root():
+    return {"msg": "app is on air"}
+
+
+class ProposalRequest(BaseModel):
+    payment_id: str
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def get_decision_maker():
+    return OllamaDecisionMaker()
+
+
+@app.post("/recovery/proposal", response_model=RecoveryProposal)
+def create_recovery_proposal(
+    request: ProposalRequest,
+    db: Session = Depends(get_db),
+    decision_maker=Depends(get_decision_maker),
+):
+    repository = RecoveryRepository(db)
+
+    if repository.get_payment(request.payment_id) is None:
+        raise HTTPException(status_code=404, detail=f"Payment {request.payment_id} not found")
+
+    try:
+        context = RecoveryContextBuilder(repository).build(request.payment_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    try:
+        return decision_maker.propose(context)
+    except OllamaUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except InvalidModelOutputError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+ 
