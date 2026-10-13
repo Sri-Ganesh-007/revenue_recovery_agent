@@ -4,8 +4,12 @@ anyio==4.15.1
 click==8.5.0
 fastapi==0.141.1
 h11==0.16.0
+httpx==0.28.1
 idna==3.20
+langchain-core==1.6.9
+langchain-ollama==1.1.0
 langgraph==1.2.14
+ollama==0.6.3
 psycopg2-binary==2.9.13
 pydantic==2.13.5
 pydantic-settings==2.15.0

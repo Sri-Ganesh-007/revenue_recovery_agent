@@ -1,0 +1,18 @@
+# Runs ONLY the API. PostgreSQL and Ollama are NOT started here: the API connects to the ones you already have.
+# Put these two lines in your (git-ignored) .env file, next to the other settings:
+#   CONTAINER_DATABASE_URL=postgresql+psycopg2://USER:PASSWORD@host.docker.internal:5433/YOUR_DATABASE
+#   CONTAINER_OLLAMA_URL=http://host.docker.internal:11434      (optional; this is the default)
+# "localhost" inside a container means the container itself, which is why a separate URL is needed.
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: ${CONTAINER_DATABASE_URL:?Set CONTAINER_DATABASE_URL in .env (see the comments in docker-compose.yml)}
+      OLLAMA_URL: ${CONTAINER_OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-120}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

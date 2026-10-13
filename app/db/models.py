@@ -1,7 +1,11 @@
 from sqlalchemy import Column,String,DateTime,Numeric,Text,JSON,ForeignKey
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base,relationship
 
 Base = declarative_base()
+
+# The real column is JSONB; plain JSON elsewhere (unit tests run on SQLite). No schema change.
+JSONType = JSON().with_variant(JSONB(), "postgresql")
 
 
 class Customer(Base):
@@ -66,7 +70,7 @@ class AgentDecision(Base):
     customer_id = Column(String(50),ForeignKey("customers.id"),nullable=False)
     payment_id = Column(String(50),ForeignKey("payments.id"),nullable=False)
     proposed_action = Column(String(50),nullable=False)
-    action_parameters = Column(JSON,nullable=True)
+    action_parameters = Column(JSONType,nullable=True)
     decision_summary = Column(Text,nullable=True)
     policy_status = Column(String(30),nullable=True)
     policy_reason = Column(Text,nullable=True)
