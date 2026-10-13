@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from app.config import Settings, settings as default_settings
 from app.context.recovery_context import RecoveryContext
 from app.schemas.recovery import DecisionEnvelope
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 
 class OllamaUnavailableError(Exception):
@@ -56,9 +57,22 @@ def context_for_prompt(context: RecoveryContext) -> str:
     return json.dumps(data)
 
 
-def build_llm(config: Settings = default_settings) -> ChatOllama:
-    return ChatOllama(model=config.ollama_model, base_url=config.ollama_url, temperature=0,
-                      num_ctx=4096, client_kwargs={"timeout": config.ollama_timeout})
+def build_llm(config: Settings = default_settings):
+    if config.llm_provider.lower() == "gemini":
+        return ChatGoogleGenerativeAI(
+            model=config.gemini_model,
+            temperature=0,
+            timeout=config.ollama_timeout,
+            max_retries=1,
+        )
+
+    return ChatOllama(
+        model=config.ollama_model,
+        base_url=config.ollama_url,
+        temperature=0,
+        num_ctx=4096,
+        client_kwargs={"timeout": config.ollama_timeout},
+    )
 
 
 def build_chain(config: Settings = default_settings):
