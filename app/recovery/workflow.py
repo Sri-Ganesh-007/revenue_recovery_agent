@@ -15,8 +15,9 @@ from langgraph.graph import END, START, StateGraph
 
 from app.context.recovery_context import RecoveryContext
 from app.recovery.decision_maker import InvalidModelOutputError
-from app.recovery.policy import DEFAULT_CONFIG, PolicyConfig, PolicyDecision, make_policy_check, snapshot_from_context
-from app.schemas.recovery import decision_parameters
+from app.recovery.policy import (DEFAULT_CONFIG, FailureCategory, PolicyConfig, PolicyDecision, classify, make_policy_check,
+                                 snapshot_from_context)
+from app.schemas.recovery import EscalateDecision, decision_parameters
 
 MAX_PROPOSALS = 2
 
@@ -93,12 +94,29 @@ def build_workflow(decision_maker, context: RecoveryContext, now: datetime, conf
     return graph.compile()
 
 
+def _timeout_fallback(attempts: list[Attempt], context: RecoveryContext, now: datetime, config: PolicyConfig) -> list[Attempt]:
+    """A gateway timeout is ambiguous and must never be retried automatically. If the LLM's (at most two) proposals were
+    all blocked, add ONE deterministic escalation, judged by the same policy like any other proposal. It is not an LLM
+    proposal and not a second workflow; it only guarantees a visible human-review record for this one failure type."""
+    if any(a.approved for a in attempts) or classify(context.failed_payment.failure_reason, config) is not FailureCategory.GATEWAY_TIMEOUT:
+        return attempts
+    decision = EscalateDecision(
+        action="escalate_to_human",
+        explanation="Safety fallback (not an AI proposal): every AI proposal was blocked and a gateway timeout is ambiguous, "
+                    "so a human should confirm whether the payment actually failed.",
+        reason="Gateway timeout: outcome unknown, automatic retries are not allowed")
+    parameters = decision_parameters(decision)
+    verdict = make_policy_check(snapshot_from_context(context, now), config)(decision.action, parameters)
+    return attempts + [Attempt(decision=decision, parameters=parameters, verdict=verdict)]
+
+
 def run_workflow(decision_maker, context: RecoveryContext, now: datetime,
                  config: PolicyConfig = DEFAULT_CONFIG) -> list[Attempt]:
-    """Ask the LLM (at most twice) and return every attempt in order. Raises InvalidModelOutputError if no
+    """Ask the LLM (at most twice) and return every attempt in order (plus the gateway-timeout escalation fallback,
+    only when all proposals were blocked). Raises InvalidModelOutputError if no
     attempt produced a usable decision, and lets OllamaUnavailableError through."""
     final = build_workflow(decision_maker, context, now, config).invoke({"attempts": [], "feedback": None})
     attempts = final["attempts"]
     if not any(a.decision is not None for a in attempts):
         raise InvalidModelOutputError(attempts[-1].error or "Model produced no valid decision")
-    return attempts
+    return _timeout_fallback(attempts, context, now, config)

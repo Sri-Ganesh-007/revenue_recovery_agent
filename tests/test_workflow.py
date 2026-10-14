@@ -39,6 +39,18 @@ def test_two_blocked_proposals_end_safely_with_nothing_approved():
     assert len(attempts) == 2 and not any(a.approved for a in attempts) and maker.calls == 2
 
 
+def test_blocked_gateway_timeout_proposals_get_one_policy_checked_escalation_without_a_third_model_call():
+    maker = FakeDecisionMaker(retry(24), update())
+    attempts = run(maker, failure_reason="gateway_timeout")
+    assert maker.calls == 2 and [a.action for a in attempts] == ["schedule_retry", "request_payment_update", "escalate_to_human"]
+    assert [a.approved for a in attempts] == [False, False, True] and attempts[2].verdict.rule == "always_allowed"
+
+
+def test_an_approved_proposal_for_a_gateway_timeout_gets_no_fallback():
+    attempts = run(FakeDecisionMaker(escalate("timeout")), failure_reason="gateway_timeout")
+    assert len(attempts) == 1 and attempts[0].approved
+
+
 def test_the_llm_is_never_asked_more_than_twice():
     maker = FakeDecisionMaker(retry(24), retry(48), retry(72))
     run(maker, failure_reason="gateway_timeout")

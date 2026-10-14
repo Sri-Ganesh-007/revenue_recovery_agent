@@ -1,8 +1,8 @@
 import re
-from functools import lru_cache
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -11,8 +11,10 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.context.context_builder import RecoveryContextBuilder
-from app.db.database import SessionLocal
-from app.recovery.decision_maker import DecisionMaker, InvalidModelOutputError, OllamaUnavailableError
+from app.demo_access import limit_llm_runs, require_access
+from app.demo_api import router as demo_router
+from app.deps import get_db, get_decision_maker
+from app.recovery.decision_maker import InvalidModelOutputError, OllamaUnavailableError
 from app.recovery.service import RecoveryError, run_recovery
 from app.repositories.recovery_repository import RecoveryRepository
 from app.schemas.recovery import RecoveryProposal, RecoveryRunResponse, to_proposal
@@ -20,6 +22,16 @@ from app.schemas.recovery import RecoveryProposal, RecoveryRunResponse, to_propo
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_.:\-]{1,200}$")
 
 app = FastAPI(title="Revenue recovery agent")
+
+# Browsers may call the API only from the origins listed in CORS_ORIGINS (set it to your deployed frontend URL).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Idempotency-Key", "X-Demo-Token"],
+    expose_headers=["Idempotent-Replayed"],
+)
+app.include_router(demo_router)
 
 
 @app.get("/")
@@ -31,37 +43,43 @@ class ProposalRequest(BaseModel):
     payment_id: str
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-@lru_cache
-def get_decision_maker():
-    return DecisionMaker()
-
-
 @app.get("/health")
 def health(db: Session = Depends(get_db)):
-    """Is the API up, and can it reach PostgreSQL and Ollama? Ollama being down is 'degraded', not an outage."""
-    checks = {"database": "ok", "ollama": "ok"}
+    """Check database connectivity and the configured LLM provider."""
+    checks = {"database": "ok", settings.llm_provider.lower(): "ok"}
+
     try:
         db.execute(text("SELECT 1"))
     except Exception:
         checks["database"] = "unavailable"
+
+    provider = settings.llm_provider.lower()
     try:
-        httpx.get(f"{settings.ollama_url}/api/tags", timeout=2).raise_for_status()
+        if provider == "gemini":
+            if not __import__("os").environ.get("GEMINI_API_KEY"):
+                checks["gemini"] = "unavailable"
+        else:
+            httpx.get(
+                f"{settings.ollama_url}/api/tags",
+                timeout=2,
+            ).raise_for_status()
     except Exception:
-        checks["ollama"] = "unavailable"
+        checks[provider] = "unavailable"
+
     healthy = checks["database"] == "ok"
-    status = "ok" if healthy and checks["ollama"] == "ok" else ("degraded" if healthy else "unavailable")
-    return JSONResponse({"status": status, **checks}, status_code=200 if healthy else 503)
+    llm_healthy = checks.get(provider) == "ok"
+    status = "ok" if healthy and llm_healthy else (
+        "degraded" if healthy else "unavailable"
+    )
+
+    return JSONResponse(
+        {"status": status, **checks},
+        status_code=200 if healthy else 503,
+    )
 
 
-@app.post("/recovery/proposal", response_model=RecoveryProposal)
+@app.post("/recovery/proposal", response_model=RecoveryProposal,
+          dependencies=[Depends(require_access), Depends(limit_llm_runs)])
 def create_recovery_proposal(
     request: ProposalRequest,
     db: Session = Depends(get_db),
@@ -88,7 +106,8 @@ def create_recovery_proposal(
         raise HTTPException(status_code=502, detail=str(exc))
 
 
-@app.post("/recovery/simulate", response_model=RecoveryRunResponse)
+@app.post("/recovery/simulate", response_model=RecoveryRunResponse,
+          dependencies=[Depends(require_access), Depends(limit_llm_runs)])
 def simulate_recovery(
     request: ProposalRequest,
     response: Response,
