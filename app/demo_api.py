@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app import dashboard, gateway
 from app.config import settings
-from app.demo_access import access_required, limit_events, require_access, spend
+from app.demo_access import limit_events, spend
 from app.context.context_builder import RecoveryContextBuilder
 from app.deps import get_db, get_decision_maker
 from app.recovery.policy import evaluate, snapshot_from_context
@@ -22,7 +22,6 @@ from app.schemas.demo import (AuditRecord, BatchItem, BatchRequest, DashboardMet
                               GatewayEventResponse, GatewayStatus, PaymentDetail, PaymentPage, PolicyPreview, SettleRequest)
 
 router = APIRouter()
-ACCESS = [Depends(require_access)]          # backend-enforced access code (see app/demo_access.py)
 
 
 def require_demo_mode():
@@ -35,16 +34,16 @@ def require_demo_mode():
 @router.get("/gateway/status", response_model=GatewayStatus)
 def gateway_status():
     return GatewayStatus(demo_mode=settings.demo_mode, llm_provider=settings.llm_provider, currency=settings.demo_currency,
-                         access_required=access_required(), batch_enabled=settings.demo_batch_enabled,
+                         batch_enabled=settings.demo_batch_enabled,
                          batch_max=settings.demo_batch_max)
 
 
-@router.get("/dashboard/metrics", response_model=DashboardMetrics, dependencies=ACCESS)
+@router.get("/dashboard/metrics", response_model=DashboardMetrics)
 def dashboard_metrics(db: Session = Depends(get_db)):
     return dashboard.metrics(db, utcnow(), settings.demo_currency)
 
 
-@router.get("/payments", response_model=PaymentPage, dependencies=ACCESS)
+@router.get("/payments", response_model=PaymentPage)
 def payments(status: str | None = None, recovery_status: str | None = None, failure_reason: str | None = None,
              search: str | None = None, limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0),
              db: Session = Depends(get_db)):
@@ -55,7 +54,7 @@ def payments(status: str | None = None, recovery_status: str | None = None, fail
     return PaymentPage(total=total, items=items)
 
 
-@router.get("/payments/{payment_id}", response_model=PaymentDetail, dependencies=ACCESS)
+@router.get("/payments/{payment_id}", response_model=PaymentDetail)
 def payment(payment_id: str, db: Session = Depends(get_db)):
     detail = dashboard.payment_detail(db, payment_id)
     if detail is None:
@@ -63,7 +62,7 @@ def payment(payment_id: str, db: Session = Depends(get_db)):
     return detail
 
 
-@router.get("/audit", response_model=list[AuditRecord], dependencies=ACCESS)
+@router.get("/audit", response_model=list[AuditRecord])
 def audit(payment_id: str | None = None, limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)):
     return dashboard.audit_records(db, payment_id, limit)
 
@@ -85,7 +84,7 @@ def _preview(db: Session, payment_id: str):
 
 
 @router.post("/gateway/events", response_model=GatewayEventResponse,
-             dependencies=[Depends(require_demo_mode), Depends(require_access), Depends(limit_events)])
+             dependencies=[Depends(require_demo_mode), Depends(limit_events)])
 def create_gateway_event(request: GatewayEventRequest, db: Session = Depends(get_db)):
     """The mock gateway announces a payment outcome (a new synthetic payment). It does NOT run the agent: the
     client then calls the existing POST /recovery/simulate for the new payment_id."""
@@ -101,7 +100,7 @@ def create_gateway_event(request: GatewayEventRequest, db: Session = Depends(get
 
 
 @router.post("/gateway/payments/{payment_id}/settle", response_model=PaymentDetail,
-             dependencies=[Depends(require_demo_mode), Depends(require_access)])
+             dependencies=[Depends(require_demo_mode)])
 def settle(payment_id: str, request: SettleRequest, db: Session = Depends(get_db)):
     """The mock processor confirms or declines the retry the agent scheduled. Revenue is recovered only on 'success'."""
     try:
@@ -115,7 +114,7 @@ BATCH_KINDS = ["insufficient_funds", "gateway_timeout", "insufficient_funds", "e
                "processor_decline", "insufficient_funds", "authentication_required", "gateway_timeout", "suspected_fraud"]
 
 
-@router.post("/gateway/batch", response_model=list[BatchItem], dependencies=[Depends(require_demo_mode), Depends(require_access)])
+@router.post("/gateway/batch", response_model=list[BatchItem], dependencies=[Depends(require_demo_mode)])
 def batch(request: BatchRequest, db: Session = Depends(get_db), decision_maker=Depends(get_decision_maker)):
     """Generate several events and run each through the same recovery flow, one after another (each is a real LLM call).
 

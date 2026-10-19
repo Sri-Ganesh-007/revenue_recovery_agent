@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.context.context_builder import RecoveryContextBuilder
-from app.demo_access import limit_llm_runs, require_access
+from app.demo_access import limit_llm_runs
 from app.demo_api import router as demo_router
 from app.deps import get_db, get_decision_maker
 from app.recovery.decision_maker import InvalidModelOutputError, OllamaUnavailableError
@@ -28,7 +28,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "Idempotency-Key", "X-Demo-Token"],
+    allow_headers=["Content-Type", "Idempotency-Key"],
     expose_headers=["Idempotent-Replayed"],
 )
 app.include_router(demo_router)
@@ -79,7 +79,7 @@ def health(db: Session = Depends(get_db)):
 
 
 @app.post("/recovery/proposal", response_model=RecoveryProposal,
-          dependencies=[Depends(require_access), Depends(limit_llm_runs)])
+          dependencies=[Depends(limit_llm_runs)])
 def create_recovery_proposal(
     request: ProposalRequest,
     db: Session = Depends(get_db),
@@ -107,7 +107,7 @@ def create_recovery_proposal(
 
 
 @app.post("/recovery/simulate", response_model=RecoveryRunResponse,
-          dependencies=[Depends(require_access), Depends(limit_llm_runs)])
+          dependencies=[Depends(limit_llm_runs)])
 def simulate_recovery(
     request: ProposalRequest,
     response: Response,

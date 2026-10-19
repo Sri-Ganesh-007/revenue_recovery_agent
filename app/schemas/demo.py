@@ -122,7 +122,6 @@ class GatewayStatus(BaseModel):
     demo_mode: bool
     llm_provider: str
     currency: str
-    access_required: bool = False          # the UI must send the access code (header X-Demo-Token)
     batch_enabled: bool = False
     batch_max: int = 0
 

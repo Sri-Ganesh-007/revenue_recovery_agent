@@ -56,7 +56,7 @@ export type Metrics = {
 export type EventKind = "insufficient_funds" | "gateway_timeout" | "success" | "retry_limit" |
   "expired_card" | "authentication_required" | "processor_decline" | "suspected_fraud";
 export type GatewayStatus = {
-  demo_mode: boolean; llm_provider: string; currency: string; access_required: boolean; batch_enabled: boolean; batch_max: number;
+  demo_mode: boolean; llm_provider: string; currency: string; batch_enabled: boolean; batch_max: number;
 };
 export type GatewayEvent = {
   kind: EventKind; payment_id: string; customer_id: string; customer_name: string; plan: string; amount: number;

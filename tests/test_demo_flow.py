@@ -10,8 +10,6 @@ from app.deps import get_db, get_decision_maker
 from app.main import app
 from tests.service_fixtures import FakeDecisionMaker, escalate, make_factory, retry, wait
 
-CODE = "test-access-code"          # a made-up value for tests only
-
 
 class AlwaysWait(FakeDecisionMaker):
     """An LLM that always proposes no_action (the policy always allows it)."""
@@ -25,7 +23,6 @@ class AlwaysWait(FakeDecisionMaker):
 @pytest.fixture
 def factory(monkeypatch):
     monkeypatch.setattr(settings, "demo_mode", True)
-    monkeypatch.setattr(settings, "demo_access_token", CODE)
     monkeypatch.setattr(settings, "demo_batch_enabled", True)
     monkeypatch.setattr(settings, "demo_batch_max", 5)
     reset_budgets()
@@ -49,7 +46,7 @@ def client(factory, maker):
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_decision_maker] = lambda: maker
-    return TestClient(app, headers={"X-Demo-Token": CODE})
+    return TestClient(app)
 
 
 def event(c, kind):
@@ -255,47 +252,16 @@ def test_cors_allows_only_the_configured_origins(factory):
     assert pre.status_code == 200 and "idempotency-key" in pre.headers["access-control-allow-headers"].lower()
 
 
-# ============================================================ access control, budgets, batch limits, timeout fallback
+# ============================================================ open dashboard, budgets, batch limits, timeout fallback
 
-def anonymous(factory, maker):
-    c = client(factory, maker)
-    c.headers.pop("X-Demo-Token")
-    return c
-
-
-def test_protected_endpoints_need_the_server_side_access_code(factory):
+def test_the_dashboard_needs_no_access_code_in_demo_mode(factory):
     maker = FakeDecisionMaker(retry(24))
-    c = anonymous(factory, maker)
-    protected = [("get", "/dashboard/metrics"), ("get", "/payments"), ("get", "/payments/x"), ("get", "/audit"),
-                 ("post", "/gateway/events", {"kind": "success"}), ("post", "/gateway/payments/gw_pay_x/settle", {"outcome": "success"}),
-                 ("post", "/gateway/batch", {"count": 1}), ("post", "/recovery/simulate", {"payment_id": "x"}),
-                 ("post", "/recovery/proposal", {"payment_id": "x"})]
-    for method, path, *body in protected:
-        r = getattr(c, method)(path, **({"json": body[0]} if body else {}))
-        assert r.status_code == 401, (path, r.status_code)
-    wrong = c.get("/payments", headers={"X-Demo-Token": "nope"})
-    assert wrong.status_code == 401 and CODE not in wrong.text
-    assert maker.calls == 0 and counts(factory) == (0, 0)
-    status = c.get("/gateway/status").json()                    # the status page stays open so the UI can ask for the code
-    assert status["access_required"] is True and "access_token" not in status
-    assert c.get("/", headers={}).status_code == 200 and c.get("/health").status_code in (200, 503)
-
-
-def test_demo_mode_without_a_configured_code_fails_closed(factory, monkeypatch):
-    monkeypatch.setattr(settings, "demo_access_token", "")
-    c = anonymous(factory, FakeDecisionMaker())
-    assert c.get("/payments").status_code == 503 and c.post("/gateway/events", json={"kind": "success"}).status_code == 503
-    monkeypatch.setattr(settings, "demo_allow_open_access", True)          # explicit local-development opt-out
-    assert c.get("/payments").status_code == 200
-
-
-def test_with_demo_mode_off_and_no_code_the_original_endpoints_behave_as_before(factory, monkeypatch):
-    monkeypatch.setattr(settings, "demo_mode", False)
-    monkeypatch.setattr(settings, "demo_access_token", "")
-    c = anonymous(factory, FakeDecisionMaker(retry(24)))
-    assert c.get("/gateway/status").json()["access_required"] is False
-    assert c.post("/recovery/simulate", json={"payment_id": "nope"}).status_code == 404       # reaches the handler, no gate
-    assert c.get("/payments").status_code == 200
+    c = client(factory, maker)                                      # no credentials of any kind are sent
+    assert c.get("/gateway/status").json()["demo_mode"] is True
+    for path in ("/dashboard/metrics", "/payments", "/audit"):
+        assert c.get(path).status_code == 200, path
+    pid = event(c, "insufficient_funds")["event"]["payment_id"]
+    assert simulate(c, pid).status_code == 200 and maker.calls == 1
 
 
 def test_the_model_budget_is_enforced_in_demo_mode(factory, monkeypatch):

@@ -16,20 +16,10 @@ function describe(detail: unknown): string {
   return detail ? JSON.stringify(detail) : "Unknown error";
 }
 
-// The demo access code is typed by the visitor and kept only for this browser tab; it is never part of the bundle.
-const CODE_KEY = "demo_access_code";
-export const accessCode = {
-  get(): string { try { return sessionStorage.getItem(CODE_KEY) ?? ""; } catch { return ""; } },
-  set(code: string) { try { sessionStorage.setItem(CODE_KEY, code); } catch { /* storage unavailable */ } },
-  clear() { try { sessionStorage.removeItem(CODE_KEY); } catch { /* storage unavailable */ } },
-};
-
-async function request<T>(path: string, init: RequestInit = {}): Promise<{ data: T; headers: Headers }> {
+async function request<T>(path: string, init?: RequestInit): Promise<{ data: T; headers: Headers }> {
   let response: Response;
-  const code = accessCode.get();
-  const headers = { ...(init.headers as Record<string, string> | undefined), ...(code ? { "X-Demo-Token": code } : {}) };
   try {
-    response = await fetch(`${BASE}${path}`, { ...init, headers });
+    response = await fetch(`${BASE}${path}`, init);
   } catch {
     throw new ApiError(0, `Cannot reach the backend at ${BASE}. Is it running, and is this site's origin listed in CORS_ORIGINS?`);
   }

@@ -222,23 +222,21 @@ Pages: **Overview** (metrics computed from persisted rows), **Payments** (filter
   call; the audit record lists it as a third entry whose summary starts "Safety fallback". Other failure types
   keep the old behaviour (blocked, nothing executed).
 
-### Public demo access (server-side)
+### Public demo protection (no login)
 
-CORS is not authentication. For a public demo, set a **shared access code on the backend**:
+The dashboard needs **no access code or login**. CORS only controls which websites a *browser* may call from; it is
+not authentication, so anyone who knows the API URL can call it directly. What limits abuse instead:
 
 | Variable | Meaning | Default |
 |---|---|---|
 | `DEMO_MODE` | enables the `/gateway/*` write endpoints (synthetic data only) | `false` |
-| `DEMO_ACCESS_TOKEN` | the access code. When set, `/recovery/*`, `/gateway/events`, `/gateway/batch`, `/gateway/payments/*/settle`, `/payments*`, `/audit` and `/dashboard/metrics` require header `X-Demo-Token`. Visitors type it into the UI; it is kept in `sessionStorage` for the tab and is never in the frontend bundle | empty |
-| `DEMO_ALLOW_OPEN_ACCESS` | local development only: allow `DEMO_MODE=true` without a code | `false` |
-| `DEMO_MAX_LLM_RUNS_PER_HOUR` | model-calling requests per hour while `DEMO_MODE` is on | `30` |
+| `DEMO_MAX_LLM_RUNS_PER_HOUR` | model-calling requests per hour while `DEMO_MODE` is on (429 when exceeded) | `30` |
 | `DEMO_MAX_EVENTS_PER_HOUR` | synthetic gateway events per hour | `60` |
 | `DEMO_BATCH_ENABLED` | the batch endpoint is off unless `true` | `false` |
 | `DEMO_BATCH_MAX` | largest batch when enabled | `3` |
 
-`DEMO_MODE=true` with no `DEMO_ACCESS_TOKEN` fails closed (HTTP 503). With `DEMO_MODE` off and no code the original
-endpoints behave exactly as before. `/`, `/health` and `/gateway/status` stay open (the UI needs the status to ask
-for the code). Budgets are in memory, per process, and reset on restart.
+Budgets are in memory, per process, and reset on restart. With `DEMO_MODE` off nothing is limited and the original
+endpoints behave as before.
 
 Other deployment variables: `CORS_ORIGINS` (comma-separated exact origins, scheme + host, **no trailing slash**,
 e.g. `https://your-demo.example`; preview URLs that change per deploy will not match) and `DEMO_CURRENCY`.
@@ -254,7 +252,7 @@ DATABASE_URL='postgresql+psycopg2://USER:PASSWORD@HOST/DBNAME?sslmode=require' p
 
 **Run the frontend:** `cd frontend && cp .env.example .env && npm install && npm run dev`
 (set `VITE_API_BASE_URL` to the API). **Deploy:** `npm run build`, host `frontend/dist` on any static host,
-and set `CORS_ORIGINS`, `DEMO_MODE=true` and `DEMO_ACCESS_TOKEN` on the API service. Not yet verified on a live deployment.
+and set `CORS_ORIGINS`, and `DEMO_MODE=true` on the API service. Not yet verified on a live deployment.
 
 ## Tests
 
@@ -287,7 +285,7 @@ pytest                      # no PostgreSQL is contacted unless TEST_DATABASE_UR
   free text, so only the exact value `insufficient_funds` is trusted for retries.
 * The audit payload lives in the existing `agent_decisions.action_parameters` JSON column because no schema
   changes were allowed; a dedicated column would be cleaner.
-* Access control is a single shared code (`DEMO_ACCESS_TOKEN`): no per-user accounts, no code rotation or lockout
-  after failed guesses, and the rate budgets are per process and in memory. Anyone with the code can use the demo
-  and read its data. Do not point a demo at a database that holds real customers.
+* **No authentication.** Anyone with the API URL can read the dashboard data and use the demo, within the hourly
+  budgets (per process, in memory, reset on restart; a replayed idempotent request still spends budget). Do not
+  point a public demo at a database that holds real customers.
 * No schema setup (the database must already exist with its tables).
